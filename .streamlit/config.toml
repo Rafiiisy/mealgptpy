@@ -1,3 +1,4 @@
 [theme]
-base="dark"
-primaryColor = "#2989ff"
+base="white"
+primaryColor = "#009934"
+titleColor = "#009934"

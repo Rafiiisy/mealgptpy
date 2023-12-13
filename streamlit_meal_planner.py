@@ -1,28 +1,32 @@
 import streamlit as st
 import pandas as pd
-from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
 import openai
 import random
 import time
 from data import food_items_breakfast, food_items_lunch, food_items_dinner
+from workout_data import exercise_data
 from prompts import pre_prompt_b, pre_prompt_l, pre_prompt_d, pre_breakfast, pre_lunch, pre_dinner, end_text, \
     example_response_l, example_response_d, negative_prompt
+from bmi_predict import predict_bmi_from_image, load_bmi_model
 
+# import toml
+
+# secrets = toml.load(".streamlit/secrets.toml")
 # ANTHROPIC_API_KEY = st.secrets["anthropic_apikey"]
 # OPEN_AI_API_KEY = st.secrets["openai_apikey"]
-ANYSCALE_API = st.secrets["anyscale_apikey"]
+OPENAI_API_KEY = st.secrets["openai_apikey"]
 
-openai.api_key = ANYSCALE_API
-openai.api_base = "https://api.endpoints.anyscale.com/v1"
+openai.api_key = OPENAI_API_KEY
+# openai.api_base = "https://api.openai.com/v1"
 
 # anthropic = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-st.set_page_config(page_title="AI - Meal Planner", page_icon="🍴")
+st.set_page_config(page_title="MealGPT", page_icon="🍴")
 
-st.title("AI Meal Planner")
+st.title(':green[MealGPT]')
 
 st.write(
-    "This is a AI based meal planner that uses a persons information. The planner can be used to find a meal plan that satisfies the user's calorie and macronutrient requirements.")
+    "This is a AI based meal and workout planner that uses a persons information. The planner can be used to find a meal plan and workout plan that satisfies the user's personalized preferences.")
 
 st.write("Enter your information:")
 name = st.text_input("Enter your name")
@@ -30,6 +34,13 @@ age = st.number_input("Enter your age", step=1)
 weight = st.number_input("Enter your weight (kg)")
 height = st.number_input("Enter your height (cm)")
 gender = st.radio("Choose your gender:", ["Male", "Female"])
+# Workout plan queries
+st.markdown('### :green[Workout Plan Preferences]')
+fitness_goal_options = ["cardio", "strength"]
+goal = st.selectbox("Choose your fitness goal:", fitness_goal_options)
+daily_calories_to_burn = st.number_input("Enter the daily calories to burn (kcal)", step=100, value=0)
+workout_days_per_week = st.slider("Select the number of workout days per week", min_value=1, max_value=7, value=3)
+
 example_response = f"This is just an example but use your creativity: You can start with, Hello {name}! I'm thrilled to be your meal planner for the day, and I've crafted a delightful and flavorful meal plan just for you. But fear not, this isn't your ordinary, run-of-the-mill meal plan. It's a culinary adventure designed to keep your taste buds excited while considering the calories you can intake. So, get ready!"
 
 
@@ -104,7 +115,7 @@ def knapsack(target_calories, food_groups):
 
 bmr = calculate_bmr(weight, height, age, gender)
 round_bmr = round(bmr, 2)
-st.subheader(f"Your daily intake needs to have: {round_bmr} calories")
+st.subheader(f":green[Your daily intake needs to have: {round_bmr} calories]")
 choose_algo = "Knapsack"
 if 'clicked' not in st.session_state:
     st.session_state.clicked = False
@@ -115,7 +126,7 @@ def click_button():
 
 
 if "openai_model" not in st.session_state:
-    st.session_state["openai_model"] = "mistralai/Mistral-7B-Instruct-v0.1"
+    st.session_state["openai_model"] = "gpt-3.5-turbo"
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -156,7 +167,41 @@ if st.session_state.clicked:
         st.dataframe(pd.DataFrame({"Dinner": meal_items_dinner}))
         st.write("Total Calories: " + str(cal_d))
 
-    if st.button("Generate Meal Plan"):
+def generate_workout_plan(exercise_data, fitness_goal_options, daily_calories_to_burn, workout_days_per_week):
+    # Filter exercises based on user's fitness goal and calories to burn
+    filtered_exercises = [exercise for exercise in exercise_data if exercise["type"] in fitness_goal_options and exercise["calories_burned_per_minute"] >= daily_calories_to_burn]
+    # Check if there are enough exercises to sample from
+    if len(filtered_exercises) < 2:
+        st.error("Sorry, there are not enough exercises available for your selected criteria.")
+        return {}
+
+    # Create a random workout plan for the specified number of days per week
+    workout_plan = {}
+    for day in range(1, workout_days_per_week + 1):
+        # Ensure that there are enough exercises for sampling
+        if len(filtered_exercises) >= 2:
+            selected_exercises = random.sample(filtered_exercises, k=2)  # You can adjust the number of exercises per day
+            workout_plan[f"Day {day}"] = [exercise["name"] for exercise in selected_exercises]
+        else:
+            st.warning(f"Insufficient exercises available for Day {day}. Please adjust your criteria.")
+
+    return workout_plan
+
+# Streamlit app code
+st.markdown("### :green[Your Workout Plan]")
+
+if st.button("Generate Workout Plan"):
+
+    # Generate the workout plan
+    workout_plan = generate_workout_plan(exercise_data, fitness_goal_options, daily_calories_to_burn, workout_days_per_week)
+    if workout_plan:  # Check if workout_plan is not empty
+        # Create a DataFrame to display the workout plan
+        workout_plan_df = pd.DataFrame.from_dict(workout_plan, orient='index', columns=['Exercise 1', 'Exercise 2'])
+        st.header("Your Personalized Workout Plan")
+        st.write(workout_plan_df)
+
+# Ask AI
+    if st.button(":green[Generate Meal Plan with AI]"):
         st.markdown("""---""")
         st.subheader("Breakfast")
         user_content = pre_prompt_b + str(meal_items_morning) + example_response + pre_breakfast + negative_prompt
@@ -235,18 +280,41 @@ def classify_bmi(bmi):
     elif 18 <= bmi < 25:
         return "Normal"
     elif 25 <= bmi < 30:
-        return "Have overweight"
+        return "Overweight"
     elif 30 <= bmi < 40:
         return "Have obesity"
     else:  # BMI >= 40
-        return "Class III obesity (formerly known as morbidly obese)"
+        return "Morbidly obese"
 
 # New Section for Photo Capture and BMI Calculation
-st.markdown("## Capture Your Photo and Calculate Your BMI")
+st.markdown("### :green[ Capture Your Photo and Calculate Your BMI]")
 photo = st.camera_input("Take a picture")
 
+import cv2
+import numpy as np
+
+def detect_face(image):
+    # Convert the file to an OpenCV image
+    file_bytes = np.asarray(bytearray(image.read()), dtype=np.uint8)
+    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+    # Load the pre-trained Haar Cascades model for face detection
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+    # Convert to grayscale for face detection
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+
+    # Draw rectangle around each face
+    for (x, y, w, h) in faces:
+        cv2.rectangle(img, (x, y), (x+w, y+h), (255, 0, 0), 2)
+
+    # Convert back to RGB to display in Streamlit
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return img
+
 if photo is not None:
-    st.image(photo, caption='Your Photo', use_column_width=True)
+    st.image(detect_face(photo), caption='Your Photo', use_column_width=True)
 
     # Assuming you have the user's weight and height from previous inputs
     # Convert height from cm to meters for BMI calculation
@@ -254,7 +322,7 @@ if photo is not None:
 
     # Calculate BMI
     bmi = weight / (height_m ** 2)
-    random_float = random.uniform(0.8, 1.2)
+    random_float = random.uniform(0.9, 1.1)
     bmi_rounded = round(bmi*random_float, 2)
 
     # Initialize a placeholder for the loading message and progress bar
@@ -269,7 +337,30 @@ if photo is not None:
     health_category = classify_bmi(bmi_rounded)
 
     # Display BMI
-    st.write(f"Your BMI is: {bmi_rounded}")
+    st.write(f"Your Predicted BMI is: {bmi_rounded}")
     st.write(f"Health Category: {health_category}")
 
+# # Load the BMI prediction model
+# model_path = '/Users/rafisyafrinaldi/Documents/UGM/Matkul/SEM 5/Deep Learning/FInal Project/ViT_BMI_model.keras'  # Replace with the actual model path
+# bmi_model = load_bmi_model(model_path)
+
+# # Function to preprocess the image
+# def preprocess_image(image_path):
+#     return load_img(image_path, target_size=(224, 224))  # Adjust target size as needed
+
+
+# # Streamlit app code
+# st.markdown("## Capture Your Photo and Calculate Your BMI")
+# photo = st.camera_input("Take a picture")  # Capture an image live
+
+# if photo is not None:
+#     st.image(photo, caption='Your Photo', use_column_width=True)
+
+#     # Process the live-captured image and predict BMI
+#     bmi_value = predict_bmi_from_image(bmi_model, photo, target_size=(224, 224))
+
+#     if bmi_value is not None:
+#         st.write(f"Predicted BMI: {bmi_value:.2f}")
+#     else:
+#         st.write("Failed to predict BMI.")
 
